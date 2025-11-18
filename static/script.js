@@ -343,259 +343,98 @@ userInput.addEventListener("input", function () {
     this.style.height = this.scrollHeight + "px";
 });
 
-// Export current conversation to PDF
-exportPdfBtn.addEventListener("click", () => {
-    if (conversationHistory.length === 0) {
-        alert("No conversation to export yet!");
-        return;
-    }
+// PDF export functionality
 
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF();
+// Text sanitization - converts to pure ASCII
+function cleanTextForPDF(text) {
+    if (!text) return "";
 
-    const pageWidth = doc.internal.pageSize.width;
-    const pageHeight = doc.internal.pageSize.height;
-    const margin = 20;
-    const maxWidth = pageWidth - margin * 2;
-    let y = 20;
+    let cleaned = String(text);
 
-    // Helper: Check if we need a new page
-    function addNewPageIfNeeded(spaceNeeded) {
-        if (y + spaceNeeded > pageHeight - 20) {
-            doc.addPage();
-            y = 20;
-        }
-    }
+    // Remove markdown formatting
+    cleaned = cleaned.replace(/\*\*(.+?)\*\*/g, "$1");
+    cleaned = cleaned.replace(/__(.+?)__/g, "$1");
+    cleaned = cleaned.replace(/\*(.+?)\*/g, "$1");
+    cleaned = cleaned.replace(/_(.+?)_/g, "$1");
+    cleaned = cleaned.replace(/`(.+?)`/g, "$1");
+    cleaned = cleaned.replace(/~~(.+?)~~/g, "$1");
 
-    // Title Page
-    doc.setFontSize(28);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(37, 99, 235);
-    doc.text("OpenStudyGuide", pageWidth / 2, 50, { align: "center" });
+    // Convert unicode quotes and dashes to ASCII equivalents
+    cleaned = cleaned.replace(/[""]/g, '"');
+    cleaned = cleaned.replace(/['']/g, "'");
+    cleaned = cleaned.replace(/[–—―]/g, "-");
+    cleaned = cleaned.replace(/[…]/g, "...");
 
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(100, 100, 100);
-    doc.text("Study Session Export", pageWidth / 2, 62, { align: "center" });
+    // Convert bullets to standard
+    cleaned = cleaned.replace(/[•●○■◆]/g, "*");
 
-    doc.setFontSize(9);
-    const date = new Date().toLocaleString("en-US", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-    });
-    doc.text(date, pageWidth / 2, 72, { align: "center" });
-
-    // Decorative line
-    doc.setDrawColor(37, 99, 235);
-    doc.setLineWidth(1);
-    doc.line(40, 82, pageWidth - 40, 82);
-
-    y = 100;
-
-    // Conversation
-    conversationHistory.forEach((msg, index) => {
-        addNewPageIfNeeded(35);
-
-        const isUser = msg.role === "user";
-
-        // Draw colored rectangle for header
-        doc.setFillColor(
-            isUser ? 37 : 243,
-            isUser ? 99 : 244,
-            isUser ? 235 : 246
-        );
-        doc.rect(margin, y - 6, maxWidth, 10, "F");
-
-        // Role label - FIXED: Use plain ASCII text
-        doc.setFontSize(10);
-        doc.setFont("helvetica", "bold");
-        doc.setTextColor(
-            isUser ? 255 : 75,
-            isUser ? 255 : 85,
-            isUser ? 255 : 99
-        );
-
-        // Use simple text without special characters
-        const roleText = isUser ? "YOU" : "AI ASSISTANT";
-        doc.text(roleText, margin + 4, y);
-
-        y += 10;
-
-        // Process message content
-        const processedContent = processMessageForPDF(msg.content);
-
-        // Render each element
-        processedContent.forEach((element) => {
-            if (element.type === "text") {
-                // Regular text
-                addNewPageIfNeeded(15);
-                doc.setFontSize(10);
-                doc.setFont("helvetica", "normal");
-                doc.setTextColor(40, 40, 40);
-
-                const lines = doc.splitTextToSize(
-                    element.content,
-                    maxWidth - 6
-                );
-                lines.forEach((line) => {
-                    addNewPageIfNeeded(6);
-                    doc.text(line, margin + 3, y);
-                    y += 5;
-                });
-                y += 3;
-            } else if (element.type === "heading") {
-                // Heading
-                addNewPageIfNeeded(12);
-                doc.setFontSize(
-                    element.level === 1 ? 14 : element.level === 2 ? 12 : 11
-                );
-                doc.setFont("helvetica", "bold");
-                doc.setTextColor(37, 99, 235);
-
-                const lines = doc.splitTextToSize(
-                    element.content,
-                    maxWidth - 6
-                );
-                lines.forEach((line) => {
-                    addNewPageIfNeeded(7);
-                    doc.text(line, margin + 3, y);
-                    y += 6;
-                });
-                y += 4;
-            } else if (element.type === "list") {
-                // List item
-                addNewPageIfNeeded(10);
-                doc.setFontSize(10);
-                doc.setFont("helvetica", "normal");
-                doc.setTextColor(40, 40, 40);
-
-                // Bullet point
-                doc.text("•", margin + 5, y);
-
-                // List text
-                const lines = doc.splitTextToSize(
-                    element.content,
-                    maxWidth - 15
-                );
-                lines.forEach((line, idx) => {
-                    addNewPageIfNeeded(6);
-                    doc.text(line, margin + 12, y);
-                    if (idx < lines.length - 1) y += 5;
-                });
-                y += 7;
-            } else if (element.type === "code") {
-                // Code block
-                addNewPageIfNeeded(15);
-                doc.setFillColor(245, 245, 245);
-
-                const lines = element.content.split("\n");
-                const blockHeight = lines.length * 5 + 6;
-
-                doc.rect(margin + 3, y - 4, maxWidth - 6, blockHeight, "F");
-
-                doc.setFontSize(9);
-                doc.setFont("courier", "normal");
-                doc.setTextColor(80, 80, 80);
-
-                lines.forEach((line) => {
-                    addNewPageIfNeeded(6);
-                    // Truncate very long lines
-                    if (line.length > 80) {
-                        line = line.substring(0, 77) + "...";
-                    }
-                    doc.text(line, margin + 6, y);
-                    y += 5;
-                });
-                y += 6;
-            } else if (element.type === "table") {
-                // Table - render as formatted text
-                addNewPageIfNeeded(20);
-
-                doc.setFontSize(10);
-                doc.setFont("helvetica", "bold");
-                doc.setTextColor(37, 99, 235);
-                doc.text("[TABLE]", margin + 3, y);
-                y += 6;
-
-                doc.setFont("helvetica", "normal");
-                doc.setTextColor(60, 60, 60);
-
-                element.rows.forEach((row, rowIdx) => {
-                    addNewPageIfNeeded(8);
-
-                    // Format row
-                    const rowText = row.join("  |  ");
-                    const lines = doc.splitTextToSize(rowText, maxWidth - 10);
-
-                    if (rowIdx === 0) {
-                        // Header row - bold
-                        doc.setFont("helvetica", "bold");
-                    } else {
-                        doc.setFont("helvetica", "normal");
-                    }
-
-                    lines.forEach((line) => {
-                        addNewPageIfNeeded(6);
-                        doc.text(line, margin + 6, y);
-                        y += 5;
-                    });
-
-                    // Separator after header
-                    if (rowIdx === 0) {
-                        doc.setDrawColor(200, 200, 200);
-                        doc.setLineWidth(0.3);
-                        doc.line(
-                            margin + 6,
-                            y - 1,
-                            margin + maxWidth - 6,
-                            y - 1
-                        );
-                        y += 2;
-                    }
-                });
-                y += 5;
+    // Remove ALL Unicode characters that could cause issues
+    // Keep only printable ASCII (space to ~)
+    cleaned = cleaned
+        .split("")
+        .map((char) => {
+            const code = char.charCodeAt(0);
+            // Allow space (32) through tilde (126) only
+            if (code >= 32 && code <= 126) {
+                return char;
             }
-        });
+            // Replace everything else with space
+            return " ";
+        })
+        .join("");
 
-        // Space between messages
-        y += 8;
+    // Collapse multiple spaces into one
+    cleaned = cleaned.replace(/\s+/g, " ");
 
-        // Separator line
-        if (index < conversationHistory.length - 1) {
-            addNewPageIfNeeded(5);
-            doc.setDrawColor(220, 220, 220);
-            doc.setLineWidth(0.3);
-            doc.line(margin + 20, y - 4, pageWidth - margin - 20, y - 4);
-            y += 4;
-        }
-    });
+    // Trim
+    cleaned = cleaned.trim();
 
-    // Page numbers on each page
-    const totalPages = doc.internal.pages.length - 1;
-    for (let i = 1; i <= totalPages; i++) {
-        doc.setPage(i);
-        doc.setFontSize(8);
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(150, 150, 150);
+    return cleaned;
+}
 
-        const footerText = "OpenStudyGuide - Page " + i + " of " + totalPages;
-        doc.text(footerText, pageWidth / 2, pageHeight - 10, {
-            align: "center",
-        });
+// Manual word-based text wrapping (avoids jsPDF splitTextToSize bug)
+function wrapText(doc, text, maxWidth) {
+    text = cleanTextForPDF(text);
+
+    if (!text || text.length === 0) {
+        return [];
     }
 
-    // Save
-    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
-    doc.save("OpenStudyGuide_" + timestamp + ".pdf");
+    // Split by words
+    const words = text.split(" ").filter((w) => w.length > 0);
+    const lines = [];
+    let currentLine = "";
 
-    // Success message
-    addBotMessage("✅ PDF exported successfully! Check your downloads folder.");
-});
+    for (let i = 0; i < words.length; i++) {
+        const word = words[i];
+        const testLine = currentLine + (currentLine ? " " : "") + word;
 
-// Process Message for PDF
+        let lineWidth;
+        try {
+            lineWidth = doc.getTextWidth(testLine);
+        } catch (e) {
+            // If we can't measure, assume it's too long
+            lineWidth = maxWidth + 1;
+        }
+
+        if (lineWidth > maxWidth && currentLine) {
+            // Line is full, save it and start new line
+            lines.push(currentLine);
+            currentLine = word;
+        } else {
+            currentLine = testLine;
+        }
+    }
+
+    // Add the last line
+    if (currentLine) {
+        lines.push(currentLine);
+    }
+
+    return lines.length > 0 ? lines : [""];
+}
+
+// Process markdown content into structured elements
 function processMessageForPDF(text) {
     const elements = [];
     const lines = text.split("\n");
@@ -631,17 +470,15 @@ function processMessageForPDF(text) {
             continue;
         }
 
-        // Tables - detect markdown tables
+        // Tables
         if (line.includes("|") && line.trim().startsWith("|")) {
-            // Check if it's a separator line
             if (line.match(/^\|[\s\-:]+\|/)) {
-                continue; // Skip separator lines
+                continue;
             }
 
-            // Parse table row
             const cells = line
                 .split("|")
-                .map((cell) => cell.trim())
+                .map((cell) => cleanTextForPDF(cell))
                 .filter((cell) => cell.length > 0);
 
             if (cells.length > 0) {
@@ -652,7 +489,6 @@ function processMessageForPDF(text) {
             }
             continue;
         } else if (currentTable) {
-            // End of table
             elements.push(currentTable);
             currentTable = null;
         }
@@ -662,35 +498,41 @@ function processMessageForPDF(text) {
             elements.push({
                 type: "heading",
                 level: 1,
-                content: line.substring(2).trim(),
+                content: cleanTextForPDF(line.substring(2)),
             });
             continue;
         } else if (line.startsWith("## ")) {
             elements.push({
                 type: "heading",
                 level: 2,
-                content: line.substring(3).trim(),
+                content: cleanTextForPDF(line.substring(3)),
             });
             continue;
         } else if (line.startsWith("### ")) {
             elements.push({
                 type: "heading",
                 level: 3,
-                content: line.substring(4).trim(),
+                content: cleanTextForPDF(line.substring(4)),
             });
             continue;
         }
 
         // Lists
         if (line.match(/^[\-\*•]\s+/)) {
-            const content = line.replace(/^[\-\*•]\s+/, "").trim();
+            const content = line.replace(/^[\-\*•]\s+/, "");
             elements.push({ type: "list", content: cleanTextForPDF(content) });
             continue;
         }
 
         if (line.match(/^\d+\.\s+/)) {
-            const content = line.replace(/^\d+\.\s+/, "").trim();
+            const content = line.replace(/^\d+\.\s+/, "");
             elements.push({ type: "list", content: cleanTextForPDF(content) });
+            continue;
+        }
+
+        // Horizontal rules
+        if (line.trim().match(/^[\-]{3,}$/)) {
+            elements.push({ type: "hr" });
             continue;
         }
 
@@ -700,10 +542,287 @@ function processMessageForPDF(text) {
         }
     }
 
-    // Add any remaining table
     if (currentTable) {
         elements.push(currentTable);
     }
 
     return elements;
 }
+
+// Export button click handler
+exportPdfBtn.addEventListener("click", () => {
+    if (conversationHistory.length === 0) {
+        alert("No conversation to export yet!");
+        return;
+    }
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+
+    const pageWidth = doc.internal.pageSize.width;
+    const pageHeight = doc.internal.pageSize.height;
+    const margin = 20;
+    const maxWidth = pageWidth - margin * 2;
+    let y = 20;
+
+    function addNewPageIfNeeded(spaceNeeded) {
+        if (y + spaceNeeded > pageHeight - 20) {
+            doc.addPage();
+            y = 20;
+        }
+    }
+
+    // Title Page
+    doc.setFontSize(28);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(37, 99, 235);
+    doc.text("OpenStudyGuide", pageWidth / 2, 50, { align: "center" });
+
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(100, 100, 100);
+    doc.text("Study Session Export", pageWidth / 2, 62, { align: "center" });
+
+    doc.setFontSize(9);
+    const date = new Date().toLocaleString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+    });
+    doc.text(date, pageWidth / 2, 72, { align: "center" });
+
+    doc.setDrawColor(37, 99, 235);
+    doc.setLineWidth(1);
+    doc.line(40, 82, pageWidth - 40, 82);
+
+    y = 100;
+
+    // Conversation Content
+    conversationHistory.forEach((msg, index) => {
+        addNewPageIfNeeded(35);
+
+        const isUser = msg.role === "user";
+
+        // Message header background
+        doc.setFillColor(
+            isUser ? 37 : 243,
+            isUser ? 99 : 244,
+            isUser ? 235 : 246
+        );
+        doc.rect(margin, y - 6, maxWidth, 10, "F");
+
+        // Role label
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(
+            isUser ? 255 : 75,
+            isUser ? 255 : 85,
+            isUser ? 255 : 99
+        );
+        const roleText = isUser ? "YOU" : "AI ASSISTANT";
+        doc.text(roleText, margin + 4, y);
+
+        y += 10;
+
+        // Process message content
+        const processedContent = processMessageForPDF(msg.content);
+
+        processedContent.forEach((element) => {
+            if (element.type === "text") {
+                // Regular Text
+                addNewPageIfNeeded(15);
+                doc.setFontSize(10);
+                doc.setFont("helvetica", "normal");
+                doc.setTextColor(40, 40, 40);
+
+                const lines = wrapText(doc, element.content, maxWidth - 6);
+                lines.forEach((line) => {
+                    addNewPageIfNeeded(6);
+                    doc.text(line, margin + 3, y);
+                    y += 5;
+                });
+                y += 3;
+            } else if (element.type === "heading") {
+                // Headings
+                addNewPageIfNeeded(12);
+                doc.setFontSize(
+                    element.level === 1 ? 14 : element.level === 2 ? 12 : 11
+                );
+                doc.setFont("helvetica", "bold");
+                doc.setTextColor(37, 99, 235);
+
+                const lines = wrapText(doc, element.content, maxWidth - 6);
+                lines.forEach((line) => {
+                    addNewPageIfNeeded(7);
+                    doc.text(line, margin + 3, y);
+                    y += 6;
+                });
+                y += 4;
+            } else if (element.type === "list") {
+                // List Items
+                addNewPageIfNeeded(10);
+                doc.setFontSize(10);
+                doc.setFont("helvetica", "normal");
+                doc.setTextColor(40, 40, 40);
+
+                doc.text("*", margin + 5, y);
+
+                const lines = wrapText(doc, element.content, maxWidth - 15);
+                lines.forEach((line, idx) => {
+                    addNewPageIfNeeded(6);
+                    doc.text(line, margin + 12, y);
+                    if (idx < lines.length - 1) y += 5;
+                });
+                y += 7;
+            } else if (element.type === "code") {
+                // Code Blocks
+                addNewPageIfNeeded(15);
+                doc.setFillColor(245, 245, 245);
+
+                const lines = element.content.split("\n");
+                const blockHeight = lines.length * 5 + 6;
+
+                doc.rect(margin + 3, y - 4, maxWidth - 6, blockHeight, "F");
+
+                doc.setFontSize(9);
+                doc.setFont("courier", "normal");
+                doc.setTextColor(80, 80, 80);
+
+                lines.forEach((line) => {
+                    addNewPageIfNeeded(6);
+                    const cleanLine = cleanTextForPDF(line);
+                    if (cleanLine.length > 80) {
+                        doc.text(
+                            cleanLine.substring(0, 77) + "...",
+                            margin + 6,
+                            y
+                        );
+                    } else {
+                        doc.text(cleanLine, margin + 6, y);
+                    }
+                    y += 5;
+                });
+                y += 6;
+            } else if (element.type === "table") {
+                // Tables
+                addNewPageIfNeeded(20);
+
+                const numColumns = Math.max(
+                    ...element.rows.map((row) => row.length)
+                );
+                const tableWidth = maxWidth - 10;
+                const colWidth = tableWidth / numColumns;
+                const cellPadding = 2;
+
+                // Header background
+                doc.setFillColor(240, 242, 245);
+                doc.rect(margin + 5, y - 2, tableWidth, 8, "F");
+
+                element.rows.forEach((row, rowIdx) => {
+                    const isHeader = rowIdx === 0;
+
+                    if (isHeader) {
+                        doc.setFont("helvetica", "bold");
+                        doc.setFontSize(9);
+                        doc.setTextColor(37, 99, 235);
+                    } else {
+                        doc.setFont("helvetica", "normal");
+                        doc.setFontSize(9);
+                        doc.setTextColor(40, 40, 40);
+                    }
+
+                    let maxCellLines = 1;
+                    const cellContents = [];
+
+                    row.forEach((cell, colIdx) => {
+                        const xPos = margin + 5 + colIdx * colWidth;
+                        const cellText = wrapText(
+                            doc,
+                            cell,
+                            colWidth - cellPadding * 2
+                        );
+                        cellContents.push({ xPos, cellText });
+                        maxCellLines = Math.max(maxCellLines, cellText.length);
+                    });
+
+                    const actualRowHeight = maxCellLines * 5 + 4;
+                    addNewPageIfNeeded(actualRowHeight + 5);
+
+                    // Zebra striping
+                    if (!isHeader && rowIdx % 2 === 0) {
+                        doc.setFillColor(250, 250, 250);
+                        doc.rect(
+                            margin + 5,
+                            y - 2,
+                            tableWidth,
+                            actualRowHeight,
+                            "F"
+                        );
+                    }
+
+                    // Draw cells
+                    doc.setDrawColor(200, 200, 200);
+                    doc.setLineWidth(0.2);
+
+                    cellContents.forEach((cellContent) => {
+                        const xPos = cellContent.xPos;
+                        doc.rect(xPos, y - 2, colWidth, actualRowHeight);
+
+                        cellContent.cellText.forEach((line, lineIdx) => {
+                            doc.text(
+                                line,
+                                xPos + cellPadding,
+                                y + 3 + lineIdx * 5
+                            );
+                        });
+                    });
+
+                    y += actualRowHeight;
+                });
+
+                y += 8;
+            } else if (element.type === "hr") {
+                // Horizontal Rule
+                addNewPageIfNeeded(8);
+                doc.setDrawColor(200, 200, 200);
+                doc.setLineWidth(0.5);
+                doc.line(margin + 20, y, pageWidth - margin - 20, y);
+                y += 8;
+            }
+        });
+
+        y += 8;
+
+        // Separator between messages
+        if (index < conversationHistory.length - 1) {
+            addNewPageIfNeeded(5);
+            doc.setDrawColor(220, 220, 220);
+            doc.setLineWidth(0.3);
+            doc.line(margin + 20, y - 4, pageWidth - margin - 20, y - 4);
+            y += 4;
+        }
+    });
+
+    // Page numbers on pdf
+    const totalPages = doc.internal.pages.length - 1;
+    for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(150, 150, 150);
+        doc.text(
+            "OpenStudyGuide - Page " + i + " of " + totalPages,
+            pageWidth / 2,
+            pageHeight - 10,
+            { align: "center" }
+        );
+    }
+
+    // Save PDF
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, "-");
+    doc.save("OpenStudyGuide_" + timestamp + ".pdf");
+
+    addBotMessage("PDF exported successfully! Check your downloads folder.");
+});
