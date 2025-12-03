@@ -23,7 +23,7 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 # Get API keys from environment
 OCR_API_KEY = os.getenv('OCR_SPACE_API_KEY')
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
-MODEL_NAME = os.getenv('MODEL_NAME', 'meta-llama/llama-3.1-8b-instruct:free')
+MODEL_NAME = os.getenv('MODEL_NAME', 'openai/gpt-oss-20b:free')
 
 # Initialize OpenRouter client (uses OpenAI library but points to OpenRouter)
 client = OpenAI(
