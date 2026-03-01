@@ -2,5 +2,6 @@ Flask
 python-dotenv
 PyPDF2
 requests
-openai
+werkzeug
+google-genai
 gunicorn
