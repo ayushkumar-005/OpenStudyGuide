@@ -8,25 +8,23 @@ from flask import Flask, jsonify, render_template, request
 from google import genai
 from werkzeug.utils import secure_filename
 
-# Loading environment variables
+# Load environment variables
 load_dotenv()
 
-# APP SETUP
 app = Flask(__name__)
 
 # Configuration
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB max
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB max upload size
 app.config["UPLOAD_FOLDER"] = "uploads"
 
-# Create uploads folder
+# Ensure uploads folder exists
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
-# Get API keys from environment
+# Environment variables
 OCR_API_KEY = os.getenv("OCR_SPACE_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
 
-# System instruction for the AI
 SYSTEM_INSTRUCTION = """You are a helpful study assistant. Your purpose is to help students understand their study materials and answer their questions.
 
 Guidelines:
@@ -35,62 +33,75 @@ Guidelines:
 - If you don't know something, say so honestly
 - Be encouraging and supportive
 - Break down complex topics into simple terms
-- Use examples when helpful"""
-
-# Initialize Gemini client with modern google-genai package
-client = genai.Client(api_key=GEMINI_API_KEY)
+- Use examples when helpful
+"""
 
 
-# ROUTE: Homepage
-@app.route("/")
+def get_gemini_client():
+    """Create Gemini client only when needed, not during app startup."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+    return genai.Client(api_key=GEMINI_API_KEY)
+
+
+@app.route("/", methods=["GET"])
 def home():
     return render_template("index.html")
 
 
-# ROUTE: Handle Chat Messages
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
-    """Handles incoming chat messages and file uploads"""
+    """Handle incoming chat messages and file uploads."""
+    filepath = None
 
     try:
-        # Get data from request
-        user_message = request.form.get("message", "")
-        conversation_history = json.loads(
-            request.form.get("conversation_history", "[]")
-        )
+        user_message = request.form.get("message", "").strip()
 
-        # Check for uploaded file
+        raw_history = request.form.get("conversation_history", "[]")
+        try:
+            conversation_history = json.loads(raw_history)
+            if not isinstance(conversation_history, list):
+                conversation_history = []
+        except json.JSONDecodeError:
+            conversation_history = []
+
         uploaded_file = request.files.get("file")
         file_type = request.form.get("file_type")
 
         extracted_text = None
 
-        # Process file if present
         if uploaded_file and file_type:
-            filename = secure_filename(uploaded_file.filename)
+            filename = secure_filename(uploaded_file.filename or "")
+
+            if not filename:
+                return jsonify({"success": False, "error": "Invalid uploaded file."}), 400
+
             filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
             uploaded_file.save(filepath)
 
-            print(f"📁 Processing {file_type}: {filename}")
+            app.logger.info("Processing %s: %s", file_type, filename)
 
-            # Extract text based on file type
             if file_type == "pdf":
                 extracted_text = extract_text_from_pdf(filepath)
             elif file_type == "image":
                 extracted_text = extract_text_from_image(filepath)
-
-            # Clean up temporary file
-            os.remove(filepath)
+            else:
+                return jsonify({"success": False, "error": "Unsupported file type."}), 400
 
             if extracted_text:
-                print(f"✅ Extracted {len(extracted_text)} characters")
+                app.logger.info("Extracted %s characters", len(extracted_text))
 
-        # Get AI response from Gemini
         bot_response = get_ai_response(
-            user_message, conversation_history, extracted_text
+            user_message=user_message,
+            conversation_history=conversation_history,
+            document_text=extracted_text,
         )
 
-        # Update conversation history
         conversation_history.append({"role": "user", "content": user_message})
         conversation_history.append({"role": "assistant", "content": bot_response})
 
@@ -100,17 +111,22 @@ def chat():
                 "response": bot_response,
                 "conversation_history": conversation_history,
             }
-        )
+        ), 200
 
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
-        return jsonify({"success": False, "error": str(e)})
+        app.logger.exception("Error in /chat")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+    finally:
+        if filepath and os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except OSError:
+                app.logger.warning("Could not delete temp file: %s", filepath)
 
 
-# Extract Text from PDF
 def extract_text_from_pdf(filepath):
-    """Extracting text from PDF using PyPDF2"""
-
+    """Extract text from PDF using PyPDF2."""
     try:
         text = ""
 
@@ -118,29 +134,31 @@ def extract_text_from_pdf(filepath):
             pdf_reader = PyPDF2.PdfReader(file)
             num_pages = len(pdf_reader.pages)
 
-            print(f"📄 PDF has {num_pages} pages")
+            app.logger.info("PDF has %s pages", num_pages)
 
-            # Extract text from each page
-            for page_num in range(num_pages):
-                page = pdf_reader.pages[page_num]
-                page_text = page.extract_text()
+            for page in pdf_reader.pages:
+                page_text = page.extract_text() or ""
                 text += page_text + "\n\n"
 
         if not text.strip():
-            return "⚠️ This PDF appears to be image-based. Try converting it to text first or use an image upload."
+            return (
+                "⚠️ This PDF appears to be image-based. "
+                "Try converting it to text first or use an image upload."
+            )
 
         return text.strip()
 
     except Exception as e:
-        print(f"Error extracting PDF: {str(e)}")
+        app.logger.exception("Error extracting PDF")
         return f"❌ Error reading PDF: {str(e)}"
 
 
-# FUNCTION: Extract Text from Image (OCR.space)
 def extract_text_from_image(filepath):
-    """Extracting text from image using OCR.space API"""
-
+    """Extract text from image using OCR.space API."""
     try:
+        if not OCR_API_KEY:
+            return "❌ OCR_SPACE_API_KEY is not set."
+
         url = "https://api.ocr.space/parse/image"
 
         with open(filepath, "rb") as image_file:
@@ -155,55 +173,59 @@ def extract_text_from_image(filepath):
 
             files = {"filename": image_file}
 
-            print(f"🖼️ Sending image to OCR.space...")
+            app.logger.info("Sending image to OCR.space")
 
-            response = requests.post(url, data=payload, files=files)
+            response = requests.post(url, data=payload, files=files, timeout=60)
+            response.raise_for_status()
             result = response.json()
 
             if result.get("OCRExitCode") == 1:
                 parsed_text = result.get("ParsedResults", [{}])[0].get("ParsedText", "")
 
                 if parsed_text.strip():
-                    print(f"✅ Successfully extracted text from image")
+                    app.logger.info("Successfully extracted text from image")
                     return parsed_text.strip()
-                else:
-                    return "⚠️ No text detected in this image. Make sure the image contains clear, readable text."
-            else:
-                error_message = result.get("ErrorMessage", ["Unknown error"])[0]
-                return f"❌ OCR Error: {error_message}"
+
+                return (
+                    "⚠️ No text detected in this image. "
+                    "Make sure the image contains clear, readable text."
+                )
+
+            error_message = result.get("ErrorMessage", ["Unknown error"])
+            if isinstance(error_message, list):
+                error_message = error_message[0] if error_message else "Unknown error"
+
+            return f"❌ OCR Error: {error_message}"
 
     except Exception as e:
-        print(f"Error with OCR.space API: {str(e)}")
+        app.logger.exception("Error with OCR.space API")
         return f"❌ Error processing image: {str(e)}"
 
 
-# FUNCTION: Get AI Response from Gemini
 def get_ai_response(user_message, conversation_history, document_text=None):
     """
-    Get AI response from Gemini
+    Get AI response from Gemini.
 
     Args:
-        user_message: The user's current question
-        conversation_history: Previous messages in the conversation
-        document_text: Text extracted from uploaded document (if any)
+        user_message: Current user question
+        conversation_history: Previous conversation messages
+        document_text: Extracted document text, if any
 
     Returns:
-        AI-generated response as a string
+        AI-generated response string
     """
-
     try:
-        # Build the chat history for Gemini
+        client = get_gemini_client()
+
         chat_history = []
 
-        # Add conversation history
         for msg in conversation_history:
-            role = "user" if msg["role"] == "user" else "model"
-            chat_history.append({"role": role, "parts": [{"text": msg["content"]}]})
+            role = "user" if msg.get("role") == "user" else "model"
+            content = msg.get("content", "")
+            chat_history.append({"role": role, "parts": [{"text": content}]})
 
-        # Build the current user message
         current_message = user_message
 
-        # If there's a document, prepend it to the message
         if document_text:
             current_message = f"""I have uploaded a document. Here is its content:
 
@@ -213,9 +235,8 @@ def get_ai_response(user_message, conversation_history, document_text=None):
 
 Based on this document, please answer my question: {user_message}"""
 
-        print(f"🤖 Sending request to Gemini (Model: {MODEL_NAME})...")
+        app.logger.info("Sending request to Gemini (Model: %s)", MODEL_NAME)
 
-        # Create chat session with system instruction
         chat = client.chats.create(
             model=MODEL_NAME,
             config={
@@ -226,21 +247,24 @@ Based on this document, please answer my question: {user_message}"""
             history=chat_history if chat_history else None,
         )
 
-        # Send message to Gemini
         response = chat.send_message(current_message)
+        ai_response = response.text or "Sorry, I could not generate a response."
 
-        # Extract the AI's response
-        ai_response = response.text
-
-        print(f"✅ Received response from AI ({len(ai_response)} characters)")
+        app.logger.info("Received response from AI (%s characters)", len(ai_response))
 
         return ai_response
 
     except Exception as e:
-        print(f"❌ Error calling Gemini: {str(e)}")
-        return f"❌ Sorry, I encountered an error: {str(e)}\n\nPlease make sure your Gemini API key is valid."
+        app.logger.exception("Error calling Gemini")
+        return (
+            f"❌ Sorry, I encountered an error: {str(e)}\n\n"
+            "Please make sure your Gemini API key is valid."
+        )
 
 
-# Initialize app
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=True,
+    )
